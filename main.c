@@ -21,8 +21,14 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "stdio.h"
 #include "string.h"
+#include "stdio.h"
+#include "stdlib.h"
+#include "lwgps/lwgps.h"
+#include "hdc1080.h"
+
+#define ADXL_I2C_SLAVE_ADDRES 0xA6
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -42,8 +48,14 @@
 
 /* Private variables ---------------------------------------------------------*/
 ADC_HandleTypeDef hadc1;
-ADC_HandleTypeDef hadc2;
 
+I2C_HandleTypeDef hi2c1;
+I2C_HandleTypeDef hi2c2;
+
+TIM_HandleTypeDef htim2;
+TIM_HandleTypeDef htim4;
+
+UART_HandleTypeDef huart2;
 UART_HandleTypeDef huart3;
 
 /* USER CODE BEGIN PV */
@@ -53,9 +65,13 @@ UART_HandleTypeDef huart3;
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
-static void MX_ADC1_Init(void);
-static void MX_ADC2_Init(void);
+static void MX_TIM2_Init(void);
+static void MX_TIM4_Init(void);
 static void MX_USART3_UART_Init(void);
+static void MX_I2C1_Init(void);
+static void MX_ADC1_Init(void);
+static void MX_I2C2_Init(void);
+static void MX_USART2_UART_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -63,102 +79,37 @@ static void MX_USART3_UART_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-typedef struct
+uint8_t data[12];
+uint8_t  value1=0;
+uint8_t adc_x_1=0;
+uint8_t adc_y_1=0;
+
+// gps için
+lwgps_t gps;
+
+uint8_t rx_buffer[128];
+uint8_t rx_index = 0;
+uint8_t rx_data = 0;
+
+// sıcaklık için
+volatile uint8_t humi;
+volatile uint8_t read_data[2];
+volatile uint16_t reg=0;
+volatile float temp;
+
+// ADXL345
+uint8_t myDatas[6];
+int16_t x,y,z;
+float xg, yg, zg;
+
+void LORA_RECEIVE()
 {
-	uint8_t data1;
-	uint8_t x_adc;
-	uint8_t y_adc;
+	HAL_UART_Receive(&huart3, data, sizeof(data), HAL_MAX_DELAY);
 
-
-
-
-
-
-
-
-
-}myDatas;
-
-uint32_t counter;
-
-uint32_t adc1_value;
-uint8_t r_adc1_value;
-uint32_t adc2_value;
-uint8_t r_adc2_value;
-
-
-
-uint32_t MAP(uint32_t A,uint32_t B,uint32_t C,uint32_t D,uint32_t E)
-{
-	return A*E/C;
+	memcpy(&value1, &data[0], sizeof(int));
+	memcpy(&adc_x_1, &data[4], sizeof(int));
+	memcpy(&adc_y_1, &data[8], sizeof(int));
 }
-
-void ADC1_READ()
-{
-	HAL_ADC_Start(&hadc1);
-
-	if(HAL_ADC_PollForConversion(&hadc1, 50)==HAL_OK)
-
-	{
-		adc1_value=HAL_ADC_GetValue(&hadc1);
-	}
-
-	HAL_ADC_Stop(&hadc1);
-
-
-}
-
-void ADC2_READ()
-{
-	HAL_ADC_Start(&hadc2);
-
-	if(HAL_ADC_PollForConversion(&hadc2, 50)==HAL_OK)
-
-	{
-		adc2_value=HAL_ADC_GetValue(&hadc2);
-	}
-
-	HAL_ADC_Stop(&hadc2);
-
-
-}
-
-
-
-
-
-
-
-
-
-void LORA_TRANSMIT(uint8_t ADDH,uint8_t ADDL,uint8_t channel,myDatas *mydata)
-{
-
-	uint8_t SendData[15];
-
-	SendData[0]=ADDH;
-	SendData[1]=ADDL;
-	SendData[2]=channel;
-
-
-
-
-	memcpy(&SendData[3],&mydata->data1,sizeof(int));
-	memcpy(&SendData[7],&mydata->x_adc,sizeof(int));
-	memcpy(&SendData[11],&mydata->y_adc,sizeof(int));
-
-
-
-
-
-
-	//HAL_UART_Transmit(&huart3, SendData, sizeof(SendData), 100);
-
-	HAL_UART_Transmit(&huart3, SendData, sizeof(SendData),HAL_MAX_DELAY);
-
-}
-
-
 
 /* USER CODE END 0 */
 
@@ -191,11 +142,20 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_ADC1_Init();
-  MX_ADC2_Init();
+  MX_TIM2_Init();
+  MX_TIM4_Init();
   MX_USART3_UART_Init();
+  MX_I2C1_Init();
+  MX_ADC1_Init();
+  MX_I2C2_Init();
+  MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
-  myDatas mydata;
+  HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2);
+
+  lwgps_init(&gps);
+  HAL_UART_Receive_IT(&huart2, &rx_data, 1);
+
+  HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_1);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -206,27 +166,107 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
 
-	  counter=counter+1;
+      LORA_RECEIVE();
 
+      // ADXL345 Ivmeolcer Verileri
+      x = (myDatas[1] << 8) | myDatas[0];
+      y = (myDatas[3] << 8) | myDatas[2];
+      z = (myDatas[5] << 8) | myDatas[4];
 
-	  ADC1_READ();
-	  ADC2_READ();
+      xg = x * .0078;
+      yg = y * .0078;
+      zg = z * .0078;
 
-	  r_adc1_value=MAP(adc1_value, 0, 4095, 0, 255);
-	  r_adc2_value=MAP(adc2_value, 0, 4095, 0, 255);
+      // -----------------------------------------------------------------
+      // HIZLARI DÜŞÜRÜLMÜŞ MOTOR SÜRME ALGORİTMASI (MAKS PWM: 500)
+      // -----------------------------------------------------------------
 
+      // Durum 1: İleri Hareket (Y değeri üst ölü bölge sınırının üzerindeyse)
+      if (adc_y_1 > 220)
+      {
+          // Kademeli Hız Eşleme: [221, 255] -> [250, 500] PWM aralığı
+          uint32_t pwm_hiz = 250 + (((uint32_t)(adc_y_1 - 220) * (500 - 250)) / (255 - 220));
 
+          // Diferansiyel Dönüş Kontrolü
+          if (adc_x_1 > 210) // İleri + Sağa Yumuşak Dönüş
+          {
+              uint32_t donis_farki = ((uint32_t)(adc_x_1 - 210) * pwm_hiz) / (255 - 210);
+              __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, (uint16_t)(pwm_hiz - donis_farki)); // Sağ Motor Yavaşlar
+              __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, (uint16_t)pwm_hiz);                // Sol Motor Hızlı
+          }
+          else if (adc_x_1 < 180) // İleri + Sola Yumuşak Dönüş
+          {
+              uint32_t donis_farki = ((uint32_t)(180 - adc_x_1) * pwm_hiz) / 180;
+              __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, (uint16_t)pwm_hiz);                // Sağ Motor Hızlı
+              __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, (uint16_t)(pwm_hiz - donis_farki)); // Sol Motor Yavaşlar
+          }
+          else // Tam Düz İleri
+          {
+              __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, (uint16_t)pwm_hiz);
+              __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, (uint16_t)pwm_hiz);
+          }
 
-	  mydata.data1=counter;
-	  mydata.x_adc=r_adc1_value;
-	  mydata.y_adc=r_adc2_value;
+          // Motor Yönleri: İki Motor da İleri
+          HAL_GPIO_WritePin(GPIOD, GPIO_PIN_2, GPIO_PIN_SET);
+          HAL_GPIO_WritePin(GPIOD, GPIO_PIN_3, GPIO_PIN_RESET);
+          HAL_GPIO_WritePin(GPIOE, GPIO_PIN_11, GPIO_PIN_SET);
+          HAL_GPIO_WritePin(GPIOE, GPIO_PIN_12, GPIO_PIN_RESET);
+      }
 
+      // Durum 2: Geri Hareket (Y değeri alt ölü bölge sınırının altındaysa)
+      else if (adc_y_1 < 190)
+      {
+          // Kademeli Hız Eşleme: [0, 189] -> [250, 500] PWM aralığı
+          uint32_t pwm_hiz = 250 + (((uint32_t)(189 - adc_y_1) * (500 - 250)) / 189);
 
+          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, (uint16_t)pwm_hiz);
+          __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, (uint16_t)pwm_hiz);
 
-	  LORA_TRANSMIT(0x00, 0x0C, 0x0F, &mydata);
+          // Motor Yönleri: İki Motor da Geri
+          HAL_GPIO_WritePin(GPIOD, GPIO_PIN_2, GPIO_PIN_RESET);
+          HAL_GPIO_WritePin(GPIOD, GPIO_PIN_3, GPIO_PIN_SET);
+          HAL_GPIO_WritePin(GPIOE, GPIO_PIN_11, GPIO_PIN_RESET);
+          HAL_GPIO_WritePin(GPIOE, GPIO_PIN_12, GPIO_PIN_SET);
+      }
 
-	  HAL_Delay(300);
+      // Durum 3: Olduğu Yerde Nokta Dönüşü (Y merkezde, X ekseni uçlarda)
+      else if (adc_x_1 > 210) // Olduğu yerde sağa keskin dönüş
+      {
+          uint32_t pwm_hiz = 250 + (((uint32_t)(adc_x_1 - 210) * (450 - 250)) / (255 - 210));
+          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, (uint16_t)pwm_hiz);
+          __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, (uint16_t)pwm_hiz);
 
+          // Sağ Motor Geri, Sol Motor İleri
+          HAL_GPIO_WritePin(GPIOD, GPIO_PIN_2, GPIO_PIN_RESET);
+          HAL_GPIO_WritePin(GPIOD, GPIO_PIN_3, GPIO_PIN_SET);
+          HAL_GPIO_WritePin(GPIOE, GPIO_PIN_11, GPIO_PIN_SET);
+          HAL_GPIO_WritePin(GPIOE, GPIO_PIN_12, GPIO_PIN_RESET); // HATA DÜZELTİLDİ: GPIO_PIN_RESET yapıldı
+      }
+      else if (adc_x_1 < 180) // Olduğu yerde sola keskin dönüş
+      {
+          uint32_t pwm_hiz = 250 + (((uint32_t)(180 - adc_x_1) * (450 - 250)) / 180);
+          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, (uint16_t)pwm_hiz);
+          __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, (uint16_t)pwm_hiz);
+
+          // Sağ Motor İleri, Sol Motor Geri
+          HAL_GPIO_WritePin(GPIOD, GPIO_PIN_2, GPIO_PIN_SET);
+          HAL_GPIO_WritePin(GPIOD, GPIO_PIN_3, GPIO_PIN_RESET);
+          HAL_GPIO_WritePin(GPIOE, GPIO_PIN_11, GPIO_PIN_RESET);
+          HAL_GPIO_WritePin(GPIOE, GPIO_PIN_12, GPIO_PIN_SET);
+      }
+
+      // Durum 4: Joystick Serbest (Merkez Ölü Bölge) -> TAMAMEN DURMA VE FRENE GEÇME
+      else
+      {
+          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, 0);
+          __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, 0);
+
+          // Sürücü mantıksal çıkışlarını sıfırla
+          HAL_GPIO_WritePin(GPIOD, GPIO_PIN_2, GPIO_PIN_RESET);
+          HAL_GPIO_WritePin(GPIOD, GPIO_PIN_3, GPIO_PIN_RESET);
+          HAL_GPIO_WritePin(GPIOE, GPIO_PIN_11, GPIO_PIN_RESET);
+          HAL_GPIO_WritePin(GPIOE, GPIO_PIN_12, GPIO_PIN_RESET);
+      }
 
   }
   /* USER CODE END 3 */
@@ -257,7 +297,7 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.PLL.PLLM = 8;
   RCC_OscInitStruct.PLL.PLLN = 168;
   RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
-  RCC_OscInitStruct.PLL.PLLQ = 7;
+  RCC_OscInitStruct.PLL.PLLQ = 4;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
     Error_Handler();
@@ -285,22 +325,11 @@ void SystemClock_Config(void)
   */
 static void MX_ADC1_Init(void)
 {
-
-  /* USER CODE BEGIN ADC1_Init 0 */
-
-  /* USER CODE END ADC1_Init 0 */
-
   ADC_ChannelConfTypeDef sConfig = {0};
 
-  /* USER CODE BEGIN ADC1_Init 1 */
-
-  /* USER CODE END ADC1_Init 1 */
-
-  /** Configure the global features of the ADC (Clock, Resolution, Data Alignment and number of conversion)
-  */
   hadc1.Instance = ADC1;
   hadc1.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV4;
-  hadc1.Init.Resolution = ADC_RESOLUTION_12B;
+  hadc1.Init.Resolution = ADC_RESOLUTION_8B;
   hadc1.Init.ScanConvMode = DISABLE;
   hadc1.Init.ContinuousConvMode = ENABLE;
   hadc1.Init.DiscontinuousConvMode = DISABLE;
@@ -317,69 +346,172 @@ static void MX_ADC1_Init(void)
 
   /** Configure for the selected ADC regular channel its corresponding rank in the sequencer and its sample time.
   */
-  sConfig.Channel = ADC_CHANNEL_5;
+  sConfig.Channel = ADC_CHANNEL_4;
   sConfig.Rank = 1;
   sConfig.SamplingTime = ADC_SAMPLETIME_3CYCLES;
   if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN ADC1_Init 2 */
-
-  /* USER CODE END ADC1_Init 2 */
-
 }
 
 /**
-  * @brief ADC2 Initialization Function
+  * @brief I2C1 Initialization Function
   * @param None
   * @retval None
   */
-static void MX_ADC2_Init(void)
+static void MX_I2C1_Init(void)
 {
-
-  /* USER CODE BEGIN ADC2_Init 0 */
-
-  /* USER CODE END ADC2_Init 0 */
-
-  ADC_ChannelConfTypeDef sConfig = {0};
-
-  /* USER CODE BEGIN ADC2_Init 1 */
-
-  /* USER CODE END ADC2_Init 1 */
-
-  /** Configure the global features of the ADC (Clock, Resolution, Data Alignment and number of conversion)
-  */
-  hadc2.Instance = ADC2;
-  hadc2.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV4;
-  hadc2.Init.Resolution = ADC_RESOLUTION_12B;
-  hadc2.Init.ScanConvMode = DISABLE;
-  hadc2.Init.ContinuousConvMode = ENABLE;
-  hadc2.Init.DiscontinuousConvMode = DISABLE;
-  hadc2.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
-  hadc2.Init.ExternalTrigConv = ADC_SOFTWARE_START;
-  hadc2.Init.DataAlign = ADC_DATAALIGN_RIGHT;
-  hadc2.Init.NbrOfConversion = 1;
-  hadc2.Init.DMAContinuousRequests = DISABLE;
-  hadc2.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
-  if (HAL_ADC_Init(&hadc2) != HAL_OK)
+  hi2c1.Instance = I2C1;
+  hi2c1.Init.ClockSpeed = 400000;
+  hi2c1.Init.DutyCycle = I2C_DUTYCYCLE_2;
+  hi2c1.Init.OwnAddress1 = 0;
+  hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+  hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+  hi2c1.Init.OwnAddress2 = 0;
+  hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+  hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+  if (HAL_I2C_Init(&hi2c1) != HAL_OK)
   {
     Error_Handler();
   }
+}
 
-  /** Configure for the selected ADC regular channel its corresponding rank in the sequencer and its sample time.
+/**
+  * @brief I2C2 Initialization Function
+  * @param None
+  * @retval None
   */
-  sConfig.Channel = ADC_CHANNEL_7;
-  sConfig.Rank = 1;
-  sConfig.SamplingTime = ADC_SAMPLETIME_3CYCLES;
-  if (HAL_ADC_ConfigChannel(&hadc2, &sConfig) != HAL_OK)
+static void MX_I2C2_Init(void)
+{
+  hi2c2.Instance = I2C2;
+  hi2c2.Init.ClockSpeed = 400000;
+  hi2c2.Init.DutyCycle = I2C_DUTYCYCLE_2;
+  hi2c2.Init.OwnAddress1 = 0;
+  hi2c2.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+  hi2c2.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+  hi2c2.Init.OwnAddress2 = 0;
+  hi2c2.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+  hi2c2.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+  if (HAL_I2C_Init(&hi2c2) != HAL_OK)
+  {
+          Error_Handler();
+  }
+}
+
+/**
+  * @brief TIM2 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM2_Init(void)
+{
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_OC_InitTypeDef sConfigOC = {0};
+
+  htim2.Instance = TIM2;
+  htim2.Init.Prescaler = 84-1;
+  htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim2.Init.Period = 1000-1;
+  htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN ADC2_Init 2 */
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim2, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_Init(&htim2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 0;
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  if (HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  HAL_TIM_MspPostInit(&htim2);
+}
 
-  /* USER CODE END ADC2_Init 2 */
+/**
+  * @brief TIM4 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM4_Init(void)
+{
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_OC_InitTypeDef sConfigOC = {0};
 
+  htim4.Instance = TIM4;
+  htim4.Init.Prescaler = 84-1;
+  htim4.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim4.Init.Period = 1000-1;
+  htim4.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim4.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim4) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim4, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_Init(&htim4) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim4, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 0;
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  if (HAL_TIM_PWM_ConfigChannel(&htim4, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  HAL_TIM_MspPostInit(&htim4);
+}
+
+/**
+  * @brief USART2 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_USART2_UART_Init(void)
+{
+  huart2.Instance = USART2;
+  huart2.Init.BaudRate = 9600;
+  huart2.Init.WordLength = UART_WORDLENGTH_8B;
+  huart2.Init.StopBits = UART_STOPBITS_1;
+  huart2.Init.Parity = UART_PARITY_NONE;
+  huart2.Init.Mode = UART_MODE_TX_RX;
+  huart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart2.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_UART_Init(&huart2) != HAL_OK)
+  {
+    Error_Handler();
+  }
 }
 
 /**
@@ -389,14 +521,6 @@ static void MX_ADC2_Init(void)
   */
 static void MX_USART3_UART_Init(void)
 {
-
-  /* USER CODE BEGIN USART3_Init 0 */
-
-  /* USER CODE END USART3_Init 0 */
-
-  /* USER CODE BEGIN USART3_Init 1 */
-
-  /* USER CODE END USART3_Init 1 */
   huart3.Instance = USART3;
   huart3.Init.BaudRate = 9600;
   huart3.Init.WordLength = UART_WORDLENGTH_8B;
@@ -409,10 +533,6 @@ static void MX_USART3_UART_Init(void)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN USART3_Init 2 */
-
-  /* USER CODE END USART3_Init 2 */
-
 }
 
 /**
@@ -422,16 +542,34 @@ static void MX_USART3_UART_Init(void)
   */
 static void MX_GPIO_Init(void)
 {
-/* USER CODE BEGIN MX_GPIO_Init_1 */
-/* USER CODE END MX_GPIO_Init_1 */
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
 
   /* GPIO Ports Clock Enable */
   __HAL_RCC_GPIOH_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOE_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
+  __HAL_RCC_GPIOD_CLK_ENABLE();
 
-/* USER CODE BEGIN MX_GPIO_Init_2 */
-/* USER CODE END MX_GPIO_Init_2 */
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOE, GPIO_PIN_11|GPIO_PIN_12, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_2|GPIO_PIN_3, GPIO_PIN_RESET);
+
+  /*Configure GPIO pins : PE11 PE12 */
+  GPIO_InitStruct.Pin = GPIO_PIN_11|GPIO_PIN_12;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+  HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : PD2 PD3 */
+  GPIO_InitStruct.Pin = GPIO_PIN_2|GPIO_PIN_3;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+  HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
 }
 
 /* USER CODE BEGIN 4 */
@@ -445,7 +583,6 @@ static void MX_GPIO_Init(void)
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
-  /* User can add his own implementation to report the HAL error return state */
   __disable_irq();
   while (1)
   {
@@ -454,18 +591,7 @@ void Error_Handler(void)
 }
 
 #ifdef  USE_FULL_ASSERT
-/**
-  * @brief  Reports the name of the source file and the source line number
-  *         where the assert_param error has occurred.
-  * @param  file: pointer to the source file name
-  * @param  line: assert_param error line source number
-  * @retval None
-  */
 void assert_failed(uint8_t *file, uint32_t line)
 {
-  /* USER CODE BEGIN 6 */
-  /* User can add his own implementation to report the file name and line number,
-     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
-  /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */
